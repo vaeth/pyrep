@@ -1,0 +1,750 @@
+#!/usr/bin/python
+# (C) 2001 by Martin V\"ath <martin@mvath.de>
+import sys,getopt,os.path
+import re,string
+from glob import fnmatch
+
+BeginGrepHighlight="\x1b[01;33m"
+EndGrepHighlight="\x1b[00m"
+BeginSourceHighlight="\x1b[01;31m"
+EndSourceHighlight="\x1b[00m"
+BeginDestHighlight="\x1b[01;37m"
+EndDestHighlight="\x1b[00m"
+
+def help(exitstatus=-1):
+  HelpString="Usage: "+script+""" \
+[options] Search Replace [File1 File2 ...]
+-e s1|s2|s|r|  Print help on regular expressions in 'Search'|'Replace'
+    s1 and s2 indicate that only the first/second page for 'Search' be printed.
+    The page for 'Replace' also contains examples.
+-y  Assume 'yes' on all queries except file changes
+-Y  Assume 'yes' on all queries and be quiet
+-v  Be verbose (only useful after -Y)
+-i  Ignore case
+-b  Open in binary mode
+""" # -m  Multiline mode (not implemented yet)
+  HelpString=HelpString+"""\
+-p  Use plain string for 'Search' (no regular expression)
+-P  Use plain string for 'Replace' (no regular expression)
+-H  Do not highlight match (may be useful for redirection)
+-r DIR  Recurse down from Directory DIR. If File1 ... are given, they are
+        interpreted as masks for the filepaths. Do not forget to quote them!
+-f FILE Read 'Search' and 'Replace' from FILE (stdin if FILE=-)
+-C NUM Print NUM lines of context around match
+""" # -C NUM Print NUM lines (bytes with -m) of context around match
+  HelpString=HelpString+"""\
+-B NUM Print NUM lines of leading context
+-A NUM Print NUM lines of trailing context
+-g  Grep mode
+-c  Grep mode, count only
+-l  Grep mode, list only
+-t +/-NUM Truncate line to NUM symbols from linestart; with positive sign:
+-T [s|e]NUM  move line to leave at least NUM chars after first matchstart/end
+    visible (default is "s" and "3"). NUM may also be negative.
+"""
+  if exitstatus==0:
+    sys.stdout.write(HelpString)
+  else:
+    sys.stderr.write(HelpString)
+  sys.exit(exitstatus)
+
+def grephelp(page=0):
+  HelpStringA=r'''
+Regular expressions for the 'Search' string (first page):
+.            Any character
+A*           None or more repeats of A
+A+           One or more repeats of A
+A? or A{0,1} Optional A (=none or one repeat of A)
+A{4}B{2,4}   AAAA followed by 2,3 or 4 repeats of B
+
+To make * + ? {,} non-greedy, place a ? behind
+
+A|B          A or B
+(AB)+        Group AB, one or more repeats of this group
+\1           Same content as first group braced with ()
+^A           A at beginning of line
+A$           A at end of line
+\b \B        word boundary (No word boundary)
+
+[A-Z\b]      any capital letter or backspace
+[^A-Z\d]     all except capital letter or digit
+\d \D        digit [0-9] (all except digit)
+\w \W        alphanumeric [a-zA-Z0-9_] (all except alphanumeric)
+\s \S        whitespace (all except whitespace)
+\r \n \f \t  special characters: return newline formfeed tab
+\<character> usually becomes <character>, e.g. \( becomes (
+'''
+  HelpStringB=r'''
+Regular expressions for the 'Search' string (second page):
+(?iLmsX) (one or more of the letters iLmsX): Set special flag where:
+          i=ignore case, L=locale language (e.g. Umlaute), m=multiline mode,
+          s=dot matches also newline, X=verbose (ignore whitespace, \# comment)
+(?:...)   A group which does not count as a group (i.e. gives no references)
+(?P<name>...) Gives the group the reference name "name"
+         (in addition to the number usually given to the group
+(?P=name) Refers to a previous group (similarly as \1), but instead of a
+          number the name "name" (previously given with (?P<name>...)) is used.
+(?#...)   A comment: Ignores the content of the group
+(?=...)   Lookahead: Matches if ... would match next.
+(?!...)   Lookahead: Matches if ... would not match next.
+
+Examples:
+<f.?l+\.>           matches <full.> <fill.> <fl.> but not <feel.> <file> <ff.>
+(.*) \(or not \1\)  matches  to be (or not to be) but not  a bee (or not a B)\
+A(.*)a              matches from AlphaBetaB the substring AlphaBeta
+A(.*?)a             matches from AlphaBetaB the substring Alpha
+A(?=.*ph.*ta)(.*)a  matches from AlphaBetaB the substring AlphaBeta
+'''
+  if (not page) or page==1:
+    sys.stdout.write(HelpStringA[1:])
+  if (not page) or page==2:
+    sys.stdout.write(HelpStringB[1:])
+  sys.exit(0)
+
+def rephelp():
+  HelpString=r'''
+Special characters for 'Replace':
+\1 \2 \10    Match for group 1, 2, 10 in 'Search' string.
+%1 $10       This is equivalent to \1 \10
+\g<1>0       Match for group 1 in 'Search' string, followed by '0'
+\g<name>     Match for group "name" in 'Search' string.
+             (In 'Search' string the command (?P<name>...) must have been used)
+${1}0        This is equivalent to \g<1>0
+${name}      This is equivalent to \g<name>
+\r \n \f \t \e Special characters: return newline formfeed tab escape
+
+Examples:
+'''
+  HelpString=HelpString+script+r""" -r . '\{(.*)theorem\}' '{t:\1}' '*.tex'
+  Replaces interactively in all *.tex files of the current directory and
+  its subdirectories phrases like {...theorem} by {t:...}
+"""
+  HelpString=HelpString+script+r""" -pPY '\1' '\2' *
+  Replace silently in all files of the current directory the phrase \1 by \2
+"""
+  HelpString=HelpString+script+r""" -y '\\1' '\\2' *
+  Same as above, but show changes and ask before writing to a file.
+"""
+  HelpString=HelpString+script+r""" -g '\\1' '\\2' *
+  Same as above, but show changes and ask before writing to a file.
+"""
+  sys.stdout.write(HelpString[1:])
+  sys.exit(0)
+
+script=os.path.splitext(os.path.basename(sys.argv[0]))[0]
+try:
+  (OptList,ArgList)=getopt.getopt(sys.argv[1:],
+    "gC:B:A:yYvibpPHclr:f:t:T:e:?h",("?","h","help"))
+except getopt.error:
+  help()
+
+AlwaysReplace=AlwaysWrite=None
+GrepOnly=CountOnly=ListOnly=None
+Ignore=Binary=Multiline=None
+PlainSearch=PlainReplace=None
+RecurseName=DataName=None
+ShowChanges=Highlight=1
+Before=After=Truncate=0
+TruncateMode=0
+ShiftFromEnd=None; Shift=3
+for i in OptList:
+  if i[0]=="-?" or i[0]=="-h" or i[0]=="--?" or i[0]=="--h" or i[0]=="--help":
+    help(0)
+  elif i[0]=="-y" or i[0]=="-Y":
+    AlwaysReplace=1
+    if i[0]=="-Y":
+      AlwaysWrite=1
+      ShowChanges=None
+  elif i[0]=="-v":
+    ShowChanges=1
+  elif i[0]=="-C":
+    Before=After=int(i[1])
+  elif i[0]=="-B":
+    Before=int(i[1])
+  elif i[0]=="-A":
+    After=int(i[1])
+  elif i[0]=="-g" or i[0]=="-c" or i[0]=="-l":
+    GrepOnly=1
+    if i[0]=="-c":
+      CountOnly=1
+    elif i[0]=="-l":
+      ListOnly=1
+  elif i[0]=="-i":
+    Ignore=1
+  elif i[0]=="-H":
+    Highlight=None
+  elif i[0]=="-b":
+    Binary=1
+  elif i[0]=="-m":
+    Multiline=1
+  elif i[0]=="-p":
+    PlainSearch=1
+  elif i[0]=="-P":
+    PlainReplace=1
+  elif i[0]=="-f":
+    DataName=i[1]
+  elif i[0]=="-r":
+    RecurseName=i[1]
+  elif i[0]=="-t":
+    Truncate=int(i[1])
+    if Truncate>0: TruncateMode=1
+    elif Truncate<0: Truncate=-Truncate; TruncateMode=-1
+    else: TruncateMode=0
+  elif i[0]=="-T":
+    String=i[1]; ShiftFromEnd=None
+    if String[0]=="e" or String[0]=="E": ShiftFromEnd=1; String=String[1:]
+    elif String[0]=="s" or String[0]=="S": String=String[1:]
+    Shift=int(String)
+  elif i[0]=="-e":
+    if i[1]=="s1": grephelp(1)
+    elif i[1]=="s2": grephelp(2)
+    elif i[1]=="s": grephelp()
+    elif i[1]=="r": rephelp()
+
+
+# Read Search and Replace depending on the options used
+
+if DataName:
+  if DataName=="-":
+    Search=input("Search : ")
+    if not GrepOnly:
+      Replace=input("Replace: ")
+  else:
+    DataFile=open(DataName,"r")
+    Search=re.sub(r"\n$","",DataFile.readline())
+    if not GrepOnly:
+      Replace=re.sub(r"\n$","",DataFile.readline())
+    DataFile.close()
+else:
+  if len(ArgList)<1: help()
+  Search=ArgList[0]
+  if GrepOnly:
+    del ArgList[0]
+  else:
+    if(len(ArgList)<2): help()
+    Replace=ArgList[1]
+    del ArgList[0:1]
+
+
+# Prepare the Search pattern
+
+SearchFlags=0
+if PlainSearch: Search=re.escape(Search)
+if Ignore: SearchFlags=SearchFlags|re.IGNORECASE
+if Multiline: SearchFlags=SearchFlags|re.DOTALL|re.MULTILINE
+SearchPattern=re.compile(Search,SearchFlags)
+
+
+# Prepare the Replace data
+
+def _GetGroupSave(MatchObject,Name):
+  'Call MatchObject.group(Name) without error message'
+  try:
+    return MatchObject.group(Name)
+  except IndexError:
+    return None
+
+def _GetSomething(MatchObject,group):
+  'Return the content of MatchObject.group(group) either as string or number'
+  content=MatchObject.group(group)
+  if re.match(r"\d\d?$",content):
+    content=int(content)
+  return content
+
+_MagicPatternA=re.compile(
+  r"[\\\%\$]("        # First \ % $, and then either
+  r"(?P<n>\d\d?)|"    # a number or
+  r"(?P<s>{[^}]*}))") # { something }
+_MagicPatternB=re.compile(r"\\g<(?P<s>[^>]*)>") # \g<something>
+
+class ReplacePattern:
+  def __init__(self,Replace,substitute=1):
+    '''Generates data.self.String and self.IndexList.
+
+    self.String is the string argument Replace with all unquoted occurences of
+    %number, \number, $number, ${something}, \number, \g<something> eliminated.
+    Moreover, if substitute>0, then all unquoted
+    occurences of \r \n \f \t \e are replaced by their usual pendants.
+    To quote something, preceed it with \:
+    All quoted chars except the above combinations expand to themselves.
+
+    self.IndexList is a list of pairs (index,content) where content is
+    number/something (something may be a number or a string),
+    and index is the place (starting from 0) where the corresponding content
+    should be inserted into self.String.
+    self.IndexList is sorted in the order of the self.String, so that
+    e.g. \g<A>\g<5>x\4 leads to [(0,"A"), (0,5), (1,4)]
+
+    If the argument substitute is false (0), then everything is considered as
+    quoted.'''
+    self.IndexList=[]
+    if not substitute:
+      self.String=Replace
+      return
+    self.String=''
+    IndexAppend=self.IndexList.append
+    i=0
+    while i<len(Replace):
+      c=Replace[i]
+      if c in r"\$%":
+        m=_MagicPatternA.match(Replace[i:])
+        if m:
+          i=i+m.end()
+          content=_GetGroupSave(m,"n")   # The <n> (number) group
+          if content:                    # If existent and nonempty,
+            content=int(content)         # we change the type to a number
+          else:
+            content=_GetSomething(m,"s") # The <s> (something) group
+          IndexAppend((len(self.String),content))
+        else:
+          m=_MagicPatternB.match(Replace[i:]) # \g<something>
+          if m:
+            IndexAppend((len(self.String),_GetSomething(m,"s")))
+            i=i+m.end()
+          elif c=="\\": # A quote, but no magic string reference
+            i=i+1
+            if i<len(Replace): # We do not have a trailing '\'
+              c=Replace[i]
+              if substitute>0:
+                if   c=="r": c="\r"
+                elif c=="n": c="\n"
+                elif c=="t": c="\t"
+                elif c=="f": c="\f"
+                elif c=="e": c="\x1b"
+            self.String=self.String+c; i=i+1
+          else:
+            self.String=self.String+c; i=i+1
+      else:
+        self.String=self.String+c; i=i+1
+
+  def ReplaceString(self,Match):
+    'Returns the string that should be inserted in place of the match Match.'
+    if not self.IndexList: # If no group references are used, we are done fast:
+      return self.String
+    String=self.String; Mgroup=Match.group
+    RString=[]; append=RString.append
+    pos=0
+    for i in self.IndexList:
+      (newpos,group)=i
+      append(String[pos:newpos])
+      pos=newpos
+      append(Mgroup(group))
+    append(String[pos:])
+    return string.join(RString,'')
+
+if not GrepOnly:
+  if PlainReplace:
+    ReplaceObject=ReplacePattern(Replace,None)
+  else:
+    ReplaceObject=ReplacePattern(Replace)
+
+
+# Prepare the list of files to visit
+
+def _RecurseVisit(arg,dirname,names):
+  (MatchList,RecurseList)=arg
+  if dirname[-1]!='/': dirname=dirname+'/'
+  for i in names:
+    file=dirname+i
+    for j in MatchList:
+      if fnmatch.fnmatch(file,j):
+        RecurseList.append(file)
+        break
+
+def Recurse(MatchList=None,StartPath=".",DoRecurse=1):
+  '''Returns a list of all files matching MatchList.
+
+  If DoRecurse is false, then StartPath is ignored and the function has only
+  a similar effect as glob (except that nonmatching names are eliminated)'''
+  RecurseList=[]
+  if not MatchList:
+    if DoRecurse:
+      MatchList=[ '*' ]
+    else:
+      return RecurseList
+  if DoRecurse:
+    os.path.walk(StartPath,_RecurseVisit,(MatchList,RecurseList))
+  else:
+    _RecurseVisit((MatchList,RecurseList),"",glob.glob(MatchList))
+  return RecurseList
+
+if RecurseName:
+  FileList=Recurse(ArgList,RecurseName,1)
+else:
+  if ArgList:
+    FileList=ArgList
+  elif GrepOnly:
+    FileList=[None]
+  else:
+    FileList=Recurse(None,"",0)
+
+# Main functions to process a single file:
+
+def ListOfMatches(Firstmatch,SearchPattern,String):
+  '''Returns a list of all nonoverlapping matches of SearchPattern in String.
+
+  In contrast to findall(), the list is actually a list of match *objects*.
+  For the call, Firstmatch *must* contain the result of the command
+  SearchPattern.search(String) (and it is assumed that Firstmatch actually
+  *is* a match).
+
+  Of course, the above test could be done in this function automatically, but
+  since usually SearchPattern.search(String) is evaluated to *decide* whether
+  this function should be called, this would cost time unnecessarily.
+  The list is sorted from left to right.'''
+  MatchList=[Firstmatch]
+  pos=Firstmatch.end()
+  end=len(String)
+  if pos==0:  # If our first match is empty, we start at the next position
+    pos=pos+1 # This ensures that replacements for empty matches at the
+              # beginning are only inserted *once* (and not again in the loop).
+  while pos<=end:
+    Match=SearchPattern.search(String,pos)
+    if not Match: return MatchList
+    e=Match.end()
+    if e<=pos:  # If we could not really proceed (empty match), we start at the
+      pos=pos+1 # next position. This ensures that replacements for empty
+                # matches are only inserted *once* (not infinitely many often).
+    else: pos=e
+    MatchList.append(Match)
+  return MatchList
+
+def DivideString(String,ListOfMatches):
+  '''Separates the String at the begin/end of the Matches.
+
+  The matches must be nonoverlapping and sorted from left to right.
+  The return value is a list of string which gives the original string after
+  string.join(returnvalue,''). More precisely, the list ist
+  [Content until Begin Match1, Content of Match1, \\
+  Content of End Match1 until Begin Match2, Content of Match2, ...].
+  It may happen that some of the above strings are empty.'''
+  MarkString=[]
+  pos=0
+  append=MarkString.append
+  for i in ListOfMatches:
+    append(String[pos:i.start()])
+    pos=i.end()
+    append(String[i.start():pos])
+  append(String[pos:])
+  return MarkString
+
+_ReplaceAskString= \
+"y(es)/n(o)/r(est of file)/q(uit this file)/a(lways)/s(top all) "
+_ReplaceYesPattern=re.compile("[yj]$",re.IGNORECASE)
+_ReplaceNoPattern=re.compile("n$",re.IGNORECASE)
+_ReplaceRestPattern=re.compile("r$",re.IGNORECASE)
+_ReplaceAllPattern=re.compile("a$",re.IGNORECASE)
+_ReplaceQuitPattern=re.compile("q$",re.IGNORECASE)
+_ReplaceStopPattern=re.compile("s$",re.IGNORECASE)
+_BackSpacePattern=re.compile("[\\b]|(\33\\[3\\~)")
+def ReplaceAsk():
+  global AlwaysReplace,ReplaceRest,AlwaysWrite,AskForReplace
+  while 1:
+    answer=raw_input(_ReplaceAskString)
+    if _BackSpacePattern.search(answer): continue
+    elif _ReplaceStopPattern.match(answer): sys.exit(0)
+    elif _ReplaceYesPattern.match(answer): return 1
+    elif _ReplaceNoPattern.match(answer): return 0
+    elif _ReplaceRestPattern.match(answer):
+      AskForReplace=0
+      return 1
+    elif _ReplaceQuitPattern.match(answer):
+      AskForReplace=-1
+      return 0
+    elif _ReplaceAllPattern.match(answer):
+      AlwaysReplace=1
+      AskForReplace=0
+      return 1
+
+_HeadEllipsis="..."
+_TailEllipsis="...\n"
+_LenTailEllipsis=len(_TailEllipsis)-1 # Do not count the linefeed
+_LenHeadEllipsis=len(_HeadEllipsis)
+_write=sys.stdout.write
+def PrintLine(StringList,LineNumber,Mode=0):
+  '''Output line StringList formatted, colorized, and truncated.
+
+  Mode>0: Line with "old" content or in grep mode a line with a match.
+  Mode<0: Line with "new" content.
+  Mode=0: Informal content (no match) - used e.g. for pure "context" lines.
+
+  If Mode=0, the argument StringList is a string (not a list).
+  Otherwise, the argument must be a StringList as returned by DivideString;
+  StringList must contain at least 2 elements, because the second element is
+  the first match which is used to shift the line.
+
+  It is assumed that the last character is a newline.'''
+  if GrepOnly:
+    ModeString=""
+    if Mode:
+      BeginHighlight=BeginGrepHighlight
+      EndHighlight=EndGrepHighlight
+  elif Mode>0:
+    ModeString="-"
+    BeginHighlight=BeginSourceHighlight
+    EndHighlight=EndSourceHighlight
+  elif Mode<0:
+    ModeString="+"
+    BeginHighlight=BeginDestHighlight
+    EndHighlight=EndDestHighlight
+  else:
+    ModeString=" "
+  PreString="%s:(%d)%s:" % (FileName,LineNumber,ModeString)
+  PreStringLen=len(PreString)
+
+  # Calculate Beg, End (set CutEnd to true if End should be used), and
+  #           Len (if TruncateMode is used). Len is the Len without trailing \n
+  # It may happen that End<Beg in which case we print only ellipsis...
+
+  if TruncateMode:
+    End=Truncate-PreStringLen
+    CutEnd=1
+    if Mode:
+      Len=0
+      for i in StringList: Len=Len+len(i)
+    else:
+      Len=len(StringList)
+    Len=max(Len-1,0)
+    if Len<=End:
+      Beg=0; CutEnd=None
+    elif Mode and TruncateMode>0: # We shift only if match exists
+      Point=Shift+len(StringList[0])
+      if ShiftFromEnd: Point=Point+len(StringList[1])
+      if Point<=End-_LenTailEllipsis:
+        # The line is visible until the desired point
+        Beg=0
+        End=End-_LenTailEllipsis
+      else:
+        if Len<=Point: # Shift reaches lineend
+          Beg=Len-End+_LenHeadEllipsis
+          CutEnd=None
+        else:
+          Beg=Point-End+_LenHeadEllipsis+_LenTailEllipsis
+          End=Point
+    else: # Truncate, but do not shift
+      Beg=0; End=End-_LenTailEllipsis
+  else:
+    Beg=0; CutEnd=None
+
+  # Print according to Beg and End
+
+  # First, print the PreString and _HeadEllipsis (if Beg>0).
+  # If this string or our final string becomes too long already with
+  # the above calculated minimal size, we print ellipsis and are finished.
+  if TruncateMode:
+    if CutEnd: L=_LenTailEllipsis
+    elif Beg: i=Len-Beg+_LenHeadEllipsis; L=min(i,_LenTailEllipsis)
+    else: L=min(Len,_LenTailEllipsis)
+    if PreStringLen+L>Truncate:
+      _write(PreString[0:Truncate-_LenTailEllipsis])
+      _write(_TailEllipsis)
+      return
+    else:
+      _write(PreString)
+    if CutEnd:
+      if Beg>=End: # Our (minimal) calculation does not fit into the line
+        _write(_TailEllipsis)
+        return
+    elif Beg: # We have calculated to print _HeadEllipsis+String_until_end
+      if PreStringLen+i>Truncate: # too long
+        _write(_TailEllipsis)
+        return
+    if Beg: _write(_HeadEllipsis)
+  else:
+    _write(PreString)
+
+  # Now the main print loop
+
+  if Mode:
+    IsAMatch=None
+    Len=0
+    for i in StringList:
+      if i: # We skip empty strings
+        if Beg or CutEnd: # We calculate only if we must care
+          l=len(i); From=0; To=l
+          if CutEnd and End<Len+l: To=min(End-Len,l)
+          if Beg:
+            From=Beg-Len
+            if From<l: Beg=0
+          Len=Len+l
+          if From<To:
+            if IsAMatch: _write(BeginHighlight)
+            if From or (To<l): _write(i[From:To])
+            else: _write(i)
+            if IsAMatch: _write(EndHighlight)
+          if CutEnd and End<=Len:
+            _write(_TailEllipsis)
+            return
+        elif IsAMatch:
+          _write(BeginHighlight)
+          _write(i)
+          _write(EndHighlight)
+        else:
+          _write(i)
+      if Highlight: IsAMatch=not IsAMatch
+  elif CutEnd:
+    _write(StringList[:End])
+    _write(_TailEllipsis)
+  else:
+    _write(StringList)
+
+def ChangeString(Lines,LineNumber,ListOfMatches):
+  '''The main function to change all occurences in one line.'''
+  global LastPrinted
+  String=Lines[LineNumber]
+  NewString=[]; append=NewString.append
+  Changed=None
+  pos=0
+  DoReplace=1
+  for match in ListOfMatches:
+    start=match.start()
+    append(String[pos:start])
+    pos=end=match.end()
+    if ShowChanges:
+      PrintLine([string.join(NewString,''),String[start:end],String[end:]], \
+        LineNumber,1)
+      HavePrintedAfter=None
+      if After>0:
+        if LineNumber<LastPrinted:
+          j=LastPrinted+1
+          Ellipsis=1
+        else:
+          Ellipsis=None
+          j=LineNumber+1
+        while j<=LineNumber+After and j<len(Lines):
+          if Ellipsis:
+            print "..."
+            Ellipsis=None
+          HavePrintedAfter=1
+          PrintLine(Lines[j],j); LastPrinted=j; j=j+1
+    subs=ReplaceObject.ReplaceString(match)
+    if ShowChanges:
+      if HavePrintedAfter: print "---"
+      PrintLine([string.join(NewString,''),subs,String[end:]],LineNumber,-1)
+    if AskForReplace:
+      DoReplace=ReplaceAsk()
+    if DoReplace:
+      append(subs)
+      if subs!=String[start:end]: Changed=1
+    else:
+      append(String[start:end])
+    if AskForReplace<0: break
+  append(String[pos:])
+  if Changed:
+    Lines[LineNumber]=string.join(NewString,'')
+  return Changed
+
+def ProcessNormal(File):
+  global LastPrinted
+  Changed=None
+  Lines=File.readlines();
+  LastPrinted=-1; i=WillPrint=0
+  matches=0
+  while i<len(Lines):
+    Match=SearchPattern.search(Lines[i])
+    if Match:
+      if ListOnly:
+        print FileName
+        return (Lines,None)
+      if (not CountOnly) and (ShowChanges or GrepOnly):
+        if Before>0:
+          j=max(i-Before,LastPrinted+1)
+          while j<i: PrintLine(Lines[j],j); j=j+1
+        LastPrinted=max(i,LastPrinted)
+      MatchList=ListOfMatches(Match,SearchPattern,Lines[i])
+      matches=matches+len(MatchList)
+      if GrepOnly:
+        if not CountOnly:
+          PrintLine(DivideString(Lines[i],MatchList),i,1)
+          WillPrint=After
+      else:
+        if ChangeString(Lines,i,MatchList): Changed=1
+        if AskForReplace<0: break
+    elif WillPrint>0:
+      LastPrinted=max(i,LastPrinted)
+      WillPrint=WillPrint-1
+      PrintLine(Lines[i],i)
+    i=i+1
+  if CountOnly and matches>0:
+    print "%s: %d" % (FileName,matches)
+  return (Lines,Changed)
+
+def ProcessMultiline(File):
+  # Not implemented yet
+  All=File.read()
+  return (Changed,[All])
+
+def ProcessFile(File):
+  global AskForReplace
+  if AlwaysReplace:
+    AskForReplace=0
+  else:
+    AskForReplace=1
+  if Multiline: return ProcessMultiline(File)
+  return ProcessNormal(File)
+
+
+# Now process every file:
+
+_WriteYesPattern=re.compile("[yj]$",re.IGNORECASE)
+_WriteNoPattern=re.compile("n$",re.IGNORECASE)
+_WriteAlwaysPattern=re.compile("w$",re.IGNORECASE)
+_WriteStopPattern=re.compile("s$",re.IGNORECASE)
+def WriteAsk(Filename):
+  global AlwaysWrite
+  while 1:
+    answer=raw_input( \
+      "Write into File %s? y(es)/n(o)/w(rite always)/s(top all) " % Filename)
+    if _BackSpacePattern.search(answer): continue
+    elif _WriteYesPattern.match(answer): return 1
+    elif _WriteNoPattern.match(answer): return None
+    elif _WriteStopPattern.match(answer): sys.exit(0)
+    elif _WriteAlwaysPattern.match(answer):
+      AlwaysWrite=1
+      return 1
+
+for FileName in FileList:
+  ErrorLeave=None
+  if GrepOnly and (FileName==None or \
+    (FileName=="-" and (not os.path.isfile(FileName)))):
+      FileName="StdIn"
+      File=sys.stdin
+      try:
+        ProcessFile(File)
+      except IOError:
+        sys.stderr.write("Error when reading from standard input\n")
+        ErrorLeave=1
+  elif os.path.isfile(FileName):
+    try:
+      if Binary:
+        File=open(FileName,"rb")
+      else:
+        File=open(FileName,"r")
+    except IOError:
+      File=None
+    try:
+      try:
+        if File: (NewContent,Changed)=ProcessFile(File)
+      except IOError:
+        sys.stderr.write("Error when reading %s.\n" % FileName)
+        ErrorLeave=1
+    finally:
+      File.close()
+    if ErrorLeave or GrepOnly or not Changed: continue
+    if AlwaysWrite or WriteAsk(FileName):
+      File=None
+      try:
+        try:
+          if Binary:
+            File=open(FileName,"wb")
+          else:
+            File=open(FileName,"w")
+          for i in NewContent: File.write(i)
+        except IOError:
+          sys.stderr.write("Could not write %s.\n" % FileName)
+          ErrorLeave=1
+      finally:
+        if File: File.close()
+      if ErrorLeave:
+        exit(1)
+
