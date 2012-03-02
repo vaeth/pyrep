@@ -1,5 +1,5 @@
-#!/usr/bin/python
-# (C) 2001 by Martin V\"ath <martin@mvath.de>
+#! /usr/bin/env python
+# (C) Martin V\"ath <martin@mvath.de>
 import sys,getopt,os.path
 import re,string
 from glob import fnmatch
@@ -613,13 +613,13 @@ def ChangeString(Lines,LineNumber,ListOfMatches):
           j=LineNumber+1
         while j<=LineNumber+After and j<len(Lines):
           if Ellipsis:
-            print "..."
+            print("...")
             Ellipsis=None
           HavePrintedAfter=1
           PrintLine(Lines[j],j); LastPrinted=j; j=j+1
     subs=ReplaceObject.ReplaceString(match)
     if ShowChanges:
-      if HavePrintedAfter: print "---"
+      if HavePrintedAfter: print("---")
       PrintLine([string.join(NewString,''),subs,String[end:]],LineNumber,-1)
     if AskForReplace:
       DoReplace=ReplaceAsk()
@@ -644,7 +644,7 @@ def ProcessNormal(File):
     Match=SearchPattern.search(Lines[i])
     if Match:
       if ListOnly:
-        print FileName
+        print(FileName)
         return (Lines,None)
       if (not CountOnly) and (ShowChanges or GrepOnly):
         if Before>0:
@@ -666,7 +666,7 @@ def ProcessNormal(File):
       PrintLine(Lines[i],i)
     i=i+1
   if CountOnly and matches>0:
-    print "%s: %d" % (FileName,matches)
+    print("%s: %d" % (FileName,matches))
   return (Lines,Changed)
 
 def ProcessMultiline(File):
