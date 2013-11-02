@@ -1,4 +1,4 @@
-#! /usr/bin/env python
+#!/usr/bin/env python
 # (C) Martin V\"ath <martin@mvath.de>
 import sys,getopt,os.path
 import re,string
