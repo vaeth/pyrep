@@ -223,7 +223,7 @@ else:
   else:
     if(len(ArgList)<2): help()
     Replace=ArgList[1]
-    del ArgList[0:1]
+    del ArgList[0:2]
 
 
 # Prepare the Search pattern
