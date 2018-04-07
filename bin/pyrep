@@ -1,5 +1,15 @@
 #!/usr/bin/env python
 # (C) Martin V\"ath <martin@mvath.de>
+
+# There is a successor project written in modern python style:
+# https://github.com/vaeth/replacer
+# Use that instead since it is better in almost every aspect:
+#
+# When I wrote this code many years ago, python has just been released.
+# There was no python style recommendation out there (or I was not aware of).
+# From current viewpoint the code reads rather ugly and hardly pythonic.
+# However, I left it unchanged except for some python2/3 compatibility quirks.
+
 import sys,getopt,os.path
 import re,string
 from glob import fnmatch
@@ -330,7 +340,7 @@ class ReplacePattern:
       pos=newpos
       append(Mgroup(group))
     append(String[pos:])
-    return string.join(RString,'')
+    return ''.join(RString)
 
 if not GrepOnly:
   if PlainReplace:
@@ -409,12 +419,22 @@ def ListOfMatches(Firstmatch,SearchPattern,String):
     MatchList.append(Match)
   return MatchList
 
+def Input(String):
+  '''raw_input or input'''
+  try:
+    try:
+      return raw_input(String)
+    except NameError:
+      return input(String)
+  except KeyboardInterrupt:
+    exit(130)
+
 def DivideString(String,ListOfMatches):
   '''Separates the String at the begin/end of the Matches.
 
   The matches must be nonoverlapping and sorted from left to right.
   The return value is a list of string which gives the original string after
-  string.join(returnvalue,''). More precisely, the list ist
+  ''.join(returnvalue). More precisely, the list ist
   [Content until Begin Match1, Content of Match1, \\
   Content of End Match1 until Begin Match2, Content of Match2, ...].
   It may happen that some of the above strings are empty.'''
@@ -440,7 +460,7 @@ _BackSpacePattern=re.compile("[\\b]|(\33\\[3\\~)")
 def ReplaceAsk():
   global AlwaysReplace,ReplaceRest,AlwaysWrite,AskForReplace
   while 1:
-    answer=raw_input(_ReplaceAskString)
+    answer=Input(_ReplaceAskString)
     if _BackSpacePattern.search(answer): continue
     elif _ReplaceStopPattern.match(answer): sys.exit(0)
     elif _ReplaceYesPattern.match(answer): return 1
@@ -601,7 +621,7 @@ def ChangeString(Lines,LineNumber,ListOfMatches):
     append(String[pos:start])
     pos=end=match.end()
     if ShowChanges:
-      PrintLine([string.join(NewString,''),String[start:end],String[end:]], \
+      PrintLine([''.join(NewString),String[start:end],String[end:]], \
         LineNumber,1)
       HavePrintedAfter=None
       if After>0:
@@ -620,7 +640,7 @@ def ChangeString(Lines,LineNumber,ListOfMatches):
     subs=ReplaceObject.ReplaceString(match)
     if ShowChanges:
       if HavePrintedAfter: print("---")
-      PrintLine([string.join(NewString,''),subs,String[end:]],LineNumber,-1)
+      PrintLine([''.join(NewString),subs,String[end:]],LineNumber,-1)
     if AskForReplace:
       DoReplace=ReplaceAsk()
     if DoReplace:
@@ -631,7 +651,7 @@ def ChangeString(Lines,LineNumber,ListOfMatches):
     if AskForReplace<0: break
   append(String[pos:])
   if Changed:
-    Lines[LineNumber]=string.join(NewString,'')
+    Lines[LineNumber]=''.join(NewString)
   return Changed
 
 def ProcessNormal(File):
@@ -693,7 +713,7 @@ _WriteStopPattern=re.compile("s$",re.IGNORECASE)
 def WriteAsk(Filename):
   global AlwaysWrite
   while 1:
-    answer=raw_input( \
+    answer=Input( \
       "Write into File %s? y(es)/n(o)/w(rite always)/s(top all) " % Filename)
     if _BackSpacePattern.search(answer): continue
     elif _WriteYesPattern.match(answer): return 1

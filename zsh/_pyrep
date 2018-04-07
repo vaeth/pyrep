@@ -1,0 +1,25 @@
+#compdef pyrep
+_arguments -s -S : \
+'(1 2 * -)-h[print help]' \
+'(1 2 * -)-e+[print help on specified topic]:help topic:((s1\:"help on search expression, part 1" s2\:"help on search expression, part 2" s\:"help on search expression" r\:"help on replace expression"))' \
+'(-y)-Y[assume yes and be quiet]' \
+'-y[assume yes except on filechanges]' \
+'-v[verbose (after -Y)]' \
+'-i[ignore case]' \
+'-b[open in binary mode]' \
+'-p[use plain string for search]' \
+'-P[use plain string for replace]' \
+'-H[do not highlight matches]' \
+'-r+[recurse from DIR]:recurse-dir:_files -/' \
+'-f+[read strings from file]:from-file:_files' \
+'-C+[print specified number of lines around match]:number of lines around match:(2)' \
+'-B+[print specified number of lines before match]:number of lines before match:(2)' \
+'-A+[print specified number of lines after match]:number of lines after match:(2)' \
+'(2)-g[grep mode]' \
+'(2)-c[grep mode, count only]' \
+'(2)-l[grep mode, list only]' \
+'-t+[truncate to specified number of symbols]:truncate-number:(+78)' \
+'-T+[show at least specified number of symbols from s/e]:number of symbols to show from s/e:(s40 e40)' \
+'1:search:()' \
+'2:replace:()' \
+'*:files:_files'
